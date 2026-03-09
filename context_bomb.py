@@ -232,6 +232,22 @@ def generate_document(target_tokens: int, encoding_name: str = "cl100k_base",
     return enc.decode(tokens)
 
 
+def write_docx(text: str, path: str) -> None:
+    """Write text to a .docx file, preserving paragraph breaks."""
+    try:
+        from docx import Document
+    except ImportError:
+        print("Error: python-docx is required for .docx output.\n  pip install python-docx", file=sys.stderr)
+        sys.exit(1)
+
+    doc = Document()
+    for paragraph in text.split("\n\n"):
+        paragraph = paragraph.strip()
+        if paragraph:
+            doc.add_paragraph(paragraph)
+    doc.save(path)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a document with an exact token count (OpenAI tokenizer).",
@@ -315,8 +331,11 @@ examples:
     )
 
     if args.output:
-        with open(args.output, "w") as f:
-            f.write(doc)
+        if args.output.endswith(".docx"):
+            write_docx(doc, args.output)
+        else:
+            with open(args.output, "w") as f:
+                f.write(doc)
         if not args.quiet:
             size_mb = os.path.getsize(args.output) / (1024 * 1024)
             print(f"Wrote {args.output} ({size_mb:.1f} MB)", file=sys.stderr)
