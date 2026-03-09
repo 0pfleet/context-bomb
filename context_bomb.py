@@ -15,6 +15,8 @@ import os
 import random
 import re
 
+from difflib import get_close_matches
+
 try:
     import tiktoken
 except ImportError:
@@ -22,7 +24,98 @@ except ImportError:
     sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# Known OpenAI models and their tokenizer encodings
+# Source: tiktoken model.py (v0.12.0)
+# ---------------------------------------------------------------------------
+
+KNOWN_MODELS: dict[str, str] = {
+    # Reasoning models
+    "o1":                           "o200k_base",
+    "o1-preview":                   "o200k_base",
+    "o1-mini":                      "o200k_base",
+    "o3":                           "o200k_base",
+    "o3-mini":                      "o200k_base",
+    "o4-mini":                      "o200k_base",
+    # GPT-5
+    "gpt-5":                        "o200k_base",
+    # GPT-4.5
+    "gpt-4.5-preview":              "o200k_base",
+    # GPT-4.1
+    "gpt-4.1":                      "o200k_base",
+    "gpt-4.1-mini":                 "o200k_base",
+    "gpt-4.1-nano":                 "o200k_base",
+    # GPT-4o
+    "gpt-4o":                       "o200k_base",
+    "gpt-4o-mini":                  "o200k_base",
+    "chatgpt-4o-latest":            "o200k_base",
+    # GPT-4
+    "gpt-4":                        "cl100k_base",
+    "gpt-4-turbo":                  "cl100k_base",
+    "gpt-4-turbo-preview":          "cl100k_base",
+    "gpt-4-32k":                    "cl100k_base",
+    # GPT-3.5
+    "gpt-3.5-turbo":                "cl100k_base",
+    "gpt-3.5-turbo-16k":            "cl100k_base",
+    "gpt-3.5":                      "cl100k_base",
+    "gpt-35-turbo":                 "cl100k_base",
+    # Base / embeddings
+    "davinci-002":                  "cl100k_base",
+    "babbage-002":                  "cl100k_base",
+    "text-embedding-ada-002":       "cl100k_base",
+    "text-embedding-3-small":       "cl100k_base",
+    "text-embedding-3-large":       "cl100k_base",
+    # Legacy
+    "text-davinci-003":             "p50k_base",
+    "text-davinci-002":             "p50k_base",
+    "code-davinci-002":             "p50k_base",
+    "gpt2":                         "gpt2",
+}
+
+# Prefixes that tiktoken resolves automatically (for dated snapshots, fine-tunes, etc.)
+MODEL_PREFIXES: list[str] = [
+    "o1-", "o3-", "o4-mini-",
+    "gpt-5-", "gpt-4.5-", "gpt-4.1-", "gpt-4o-", "chatgpt-4o-",
+    "gpt-4-", "gpt-3.5-turbo-", "gpt-35-turbo-",
+    "ft:gpt-4o", "ft:gpt-4", "ft:gpt-3.5-turbo",
+    "ft:davinci-002", "ft:babbage-002",
+    "gpt-oss-",
+]
+
+
+def validate_model(model_name: str) -> str | None:
+    """Validate a model name. Returns None if valid, or an error message with suggestions."""
+    # Exact match
+    if model_name in KNOWN_MODELS:
+        return None
+
+    # Prefix match (dated snapshots like gpt-4o-2024-05-13)
+    for prefix in MODEL_PREFIXES:
+        if model_name.startswith(prefix):
+            return None
+
+    # Not found — build suggestions
+    all_names = list(KNOWN_MODELS.keys())
+    suggestions = get_close_matches(model_name, all_names, n=5, cutoff=0.4)
+
+    if not suggestions:
+        # Fallback: suggest models that share a common substring
+        lower = model_name.lower()
+        suggestions = [m for m in all_names if any(
+            part in m for part in lower.replace("-", " ").replace(".", " ").split() if len(part) > 1
+        )][:5]
+
+    msg = f"Unknown model: '{model_name}'"
+    if suggestions:
+        suggestion_list = ", ".join(suggestions)
+        msg += f"\n  Did you mean: {suggestion_list}?"
+    msg += f"\n  Run with --list-models to see all supported models."
+    return msg
+
+
+# ---------------------------------------------------------------------------
 # Diverse vocabulary for realistic-looking filler text across domains
+# ---------------------------------------------------------------------------
 WORDS = [
     # Common English
     "the", "be", "to", "of", "and", "a", "in", "that", "have", "I",
@@ -154,7 +247,7 @@ examples:
 """
     )
     parser.add_argument(
-        "tokens", type=parse_token_count,
+        "tokens", type=parse_token_count, nargs="?", default=None,
         help="Target token count. Supports K/M/B suffixes (e.g. 128K, 1.5M)"
     )
     parser.add_argument(
@@ -181,8 +274,35 @@ examples:
         "-q", "--quiet", action="store_true",
         help="Suppress progress messages (only output the document)"
     )
+    parser.add_argument(
+        "--list-models", action="store_true",
+        help="List all known models and their encodings, then exit"
+    )
 
     args = parser.parse_args()
+
+    if args.list_models:
+        print("Supported models:\n")
+        # Group by encoding
+        by_enc: dict[str, list[str]] = {}
+        for m, e in KNOWN_MODELS.items():
+            by_enc.setdefault(e, []).append(m)
+        for enc_name, models in by_enc.items():
+            print(f"  {enc_name}:")
+            for m in models:
+                print(f"    {m}")
+            print()
+        print("Dated snapshots (e.g. gpt-4o-2024-05-13) and fine-tune prefixes")
+        print("(e.g. ft:gpt-4o-...) are also supported automatically.")
+        sys.exit(0)
+
+    if args.tokens is None:
+        parser.error("the following arguments are required: tokens")
+
+    if args.model:
+        err = validate_model(args.model)
+        if err:
+            parser.error(err)
 
     if not args.quiet:
         print(f"Generating {args.tokens:,} tokens...", file=sys.stderr)
